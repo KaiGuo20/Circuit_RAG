@@ -61,7 +61,6 @@ python detection.py
 ```
 
 - Uses `torch_geometric` (GINEConv / TransformerConv) on the circuit graphs.
-- Outputs accuracy / balanced accuracy / classification report.
 
 ### Step 5b — Intervention (`intervention.py`)
 
@@ -70,9 +69,6 @@ Analyze the attribution graphs to identify which edges/positions drive correct v
 ```bash
 python intervention.py
 ```
-
-- Compares `pos_weight` distributions between External and Internal edges (Mann-Whitney U test).
-- Useful for understanding *why* the model gets an answer wrong.
 
 
 ## Dependencies
