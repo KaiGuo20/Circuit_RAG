@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Data / large artifacts (do not commit)
+data/
+*.pkl
+*.json
+*.jsonl
+*.pt
+*.npy
+*.npz
+*.csv
+*.tar
+*.tar.gz
+*.gz
+*.zip
+
+# Figures / media
+*.png
+*.gif
+*.jpg
+*.jpeg
+*.pdf
+
+# Env / local
+.conda/
+.venv/
+venv/
+.env
+*.log
+.DS_Store
