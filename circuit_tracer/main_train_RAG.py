@@ -68,7 +68,7 @@ total_training_tokens = 2_000_000 * 10
 acts_func = 'relu'
 transcoder_config = {}
 from_pretrained = False
-name = 'qwen3_14b' # 'ds-llama'
+name = 'llama3_8b' # 'ds-llama'
 
 model_name = model_name_func(name)
 if name == 'llama3_8b_finetune' or name == 'llama3_8b':
@@ -170,17 +170,7 @@ if 'llama' in name.lower():
 #     batch_size = 256
 # else:
 
-if train_dataset_name == 'prontoQA':
-    max_length = 900
-    total_training_tokens = 10_000_000 
-if train_dataset_name == 'WebQSP':
-    max_length = 300
-    total_training_tokens = 10_000_000 
-if train_dataset_name == 'WebQSP_ROG':
-    max_length = 500
-if train_dataset_name == 'RAMDOCS':
-    max_length = 300
-    total_training_tokens = 10_000_000 
+
 if train_dataset_name == 'hotpotqa':
     max_length = 500
     total_training_tokens = 10_000_000 
@@ -195,20 +185,6 @@ if train_dataset_name == 'manu_musique':
     max_length = 500
     total_training_tokens = 10_000_000 
 
-if train_dataset_name == 'boolQA':
-    max_length = 500
-    total_training_tokens = 5_000_000 
-    if 'ds' in name:
-        total_training_tokens = 20_000_000 
-
-if train_dataset_name == 'MAWPS':
-    if 'ds' in model_name.lower():
-        max_length = 400
-    else:
-        max_length = 200
-    total_training_tokens = 5_000_000 
-    # if 'llama' in model_name.lower():
-    #     total_training_tokens = 1_000_000
 
 n_batches = 16#32
 store_batch = 16#16

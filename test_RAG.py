@@ -101,7 +101,7 @@ def build_manu_musique_dataset(raw_ds, n_total=2000, seed=42):
     return Dataset.from_list(selected)
 
 
-name = 'qwen2.5_14b'  # llama3_8b, qwen3_14b
+name = 'llama3_8b'  # llama3_8b
 dataset_name = 'manu_musique'  # hotpotqa, 2wiki, musique, manu_musique
 model_name = model_name_func(name)
 model, hf_model = load_model(name)

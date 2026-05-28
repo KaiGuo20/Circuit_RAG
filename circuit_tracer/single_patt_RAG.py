@@ -68,8 +68,8 @@ total_training_tokens = 1_000_000 * 20
 acts_func = 'relu'
 transcoder_config = {}
 from_pretrained = False
-name = 'llama3_8b' # 'Qwen3-0.6B'
-train_dataset_name = "manu_musique"
+name = 'llama3_8b' # 
+train_dataset_name = "musique" #manu_musique, musique, 2wiki, hotpotqa
 # Flag to control whether to use wrong=True for hotpotqa, 2wiki, musique datasets
 wrong_answer_flag = False
 if name == 'ds-llama':
