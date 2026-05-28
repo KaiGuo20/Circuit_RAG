@@ -1,20 +1,14 @@
-# %matplotlib inline
 import os, re, json, pickle as pkl
-import numpy as np
-import pandas as pd
 import networkx as nx
-import matplotlib.pyplot as plt
-from collections import defaultdict, Counter
-from transformers import AutoTokenizer
-from scipy.stats import mannwhitneyu
 
 # ========================================
-# MIX type: External vs Internal pos_weight analysis
-# Using pos_mean (average) for fair comparison
+# MIX type: attention intervention experiment
+# Perturb attention to steer toward the question / away from distracting context,
+# then compare baseline vs. controlled generation.
 # ========================================
 
 print("="*80)
-print("MIX type: External vs Internal edge pos_weight analysis (using pos_mean)")
+print("MIX type: attention intervention experiment")
 print("="*80)
 
 # ==================== Configuration ====================
@@ -52,15 +46,6 @@ for i, item in enumerate(test_data):
     t = item.get('type', 'unknown')
     idx_to_type[i] = t
 
-# Load Tokenizer
-cache_root = 'yours'
-hf_token = 'yours'
-try:
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct", cache_dir=cache_root, token=hf_token)
-except:
-    tokenizer = AutoTokenizer.from_pretrained("meta-llama/Meta-Llama-3-8B-Instruct", cache_dir=cache_root, local_files_only=True)
-print("Tokenizer loaded")
-
 # Load Graphs
 base_path = 'yours'
 wrong_graphs = load_graphs_from_path(f'{base_path}/minus50_wrong22_graph_{CONFIG["name"]}_{CONFIG["dataset"]}_{CONFIG["edge_ratio"]}_{CONFIG["node_ratio"]}_{CONFIG["l1_co"]}/')
@@ -72,455 +57,6 @@ mix_correct_graphs = {idx: G for idx, G in correct_graphs.items() if idx_to_type
 
 print(f"MIX Wrong graphs: {len(mix_wrong_graphs)}")
 print(f"MIX Correct graphs: {len(mix_correct_graphs)}")
-
-
-# ==================== Strip Function ====================
-def strip_based_on_context(text: str) -> str:
-    start = text.find("Based on the context:")
-    if start == -1:
-        return text
-    end = text.find("\n Answer:", start)
-    if end == -1:
-        end = len(text)
-    return text[:start] + text[end:]
-
-
-# ==================== Analyzer for pos_weight ====================
-class MixAnalyzerPosWeight:
-    def __init__(self, tokenizer, n_layers=32):
-        self.tokenizer = tokenizer
-        self.n_layers = n_layers
-        self.stopwords = {
-            'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
-            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-            'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'dare',
-            'to', 'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'as',
-            'into', 'through', 'during', 'before', 'after', 'above', 'below',
-            'between', 'under', 'again', 'further', 'then', 'once', 'here',
-            'there', 'when', 'where', 'why', 'how', 'all', 'each', 'few',
-            'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not',
-            'only', 'own', 'same', 'so', 'than', 'too', 'very', 's', 't',
-            'just', 'don', 'now', 'and', 'but', 'or', 'because', 'if',
-            'that', 'this', 'these', 'those', 'it', 'its', 'he', 'she',
-            'they', 'them', 'his', 'her', 'their', 'what', 'which', 'who',
-        }
-        
-    def parse_node(self, node_name):
-        parts = node_name.rsplit('_', 2)
-        if len(parts) < 3:
-            return {'token': node_name, 'layer': -1, 'position': -1, 'valid': False}
-        try:
-            return {'token': parts[0], 'layer': int(parts[1]), 'position': int(parts[2]), 'valid': True}
-        except:
-            return {'token': node_name, 'layer': -1, 'position': -1, 'valid': False}
-    
-    def extract_external_text(self, text):
-        if 'Based on the context:' in text:
-            ext_start = text.find('Based on the context:') + len('Based on the context:')
-            ext_end = text.find('\n Answer:', ext_start)
-            if ext_end == -1:
-                ext_end = len(text)
-            return text[ext_start:ext_end].strip()
-        return ''
-    
-    def get_external_words(self, external_text):
-        clean = re.sub(r'[^\w\s]', ' ', external_text.lower())
-        words = clean.split()
-        return {w for w in words if w not in self.stopwords and len(w) > 2}
-    
-    def extract_regions_from_stripped(self, stripped_text):
-        regions = {'question_range': (-1, -1), 'answer_range': (-1, -1)}
-        if 'Question:' in stripped_text:
-            q_start = stripped_text.find('Question:') + len('Question:')
-            q_end = stripped_text.find('\n Answer:')
-            if q_end == -1:
-                q_end = len(stripped_text)
-            regions['question_range'] = (q_start, q_end)
-        if '\n Answer:' in stripped_text:
-            ans_start = stripped_text.find('\n Answer:') + len('\n Answer:')
-            regions['answer_range'] = (ans_start, len(stripped_text))
-        return regions
-    
-    def get_token_positions(self, stripped_text):
-        tokens = self.tokenizer(stripped_text, return_offsets_mapping=True)
-        offsets = tokens['offset_mapping']
-        regions = self.extract_regions_from_stripped(stripped_text)
-        
-        token_regions = {'question': [], 'answer': []}
-        q_start, q_end = regions['question_range']
-        ans_start, ans_end = regions['answer_range']
-        
-        for i, (char_start, char_end) in enumerate(offsets):
-            if char_start is None:
-                continue
-            if q_start != -1 and q_start <= char_start < q_end:
-                token_regions['question'].append(i)
-            elif ans_start != -1 and ans_start <= char_start:
-                token_regions['answer'].append(i)
-        
-        return token_regions
-    
-    def is_external_sourced(self, token_str, external_words):
-        clean_token = re.sub(r'[^\w]', '', token_str.lower())
-        if len(clean_token) <= 2 or clean_token in self.stopwords:
-            return False
-        return clean_token in external_words
-    
-    def analyze_graph_pos_weight(self, G, original_text):
-        """Analyze pos_weight of graph, distinguishing external/internal."""
-        external_text = self.extract_external_text(original_text)
-        external_words = self.get_external_words(external_text)
-        stripped_text = strip_based_on_context(original_text)
-        token_regions = self.get_token_positions(stripped_text)
-        
-        # Classify nodes
-        nodes_info = {}
-        for node in G.nodes():
-            info = self.parse_node(node)
-            if not info['valid']:
-                continue
-            pos = info['position']
-            token_str = info['token']
-
-            if pos in token_regions['question']:
-                info['region'] = 'question'
-            elif pos in token_regions['answer']:
-                if self.is_external_sourced(token_str, external_words):
-                    info['region'] = 'answer_ext'
-                else:
-                    info['region'] = 'answer_int'
-            else:
-                info['region'] = 'unknown'
-            nodes_info[node] = info
-
-        # Count pos_weight by edge type
-        result = {
-            'n_edges': G.number_of_edges(),
-            'external_words_count': len(external_words),
-            # pos_weight stats
-            'q_to_ans_ext_pos': [], 'q_to_ans_int_pos': [],
-            'ans_ext_to_ans_ext_pos': [], 'ans_ext_to_ans_int_pos': [],
-            'ans_int_to_ans_ext_pos': [], 'ans_int_to_ans_int_pos': [],
-            # neg_weight stats
-            'q_to_ans_ext_neg': [], 'q_to_ans_int_neg': [],
-            'ans_ext_to_ans_ext_neg': [], 'ans_ext_to_ans_int_neg': [],
-            'ans_int_to_ans_ext_neg': [], 'ans_int_to_ans_int_neg': [],
-            # node stats
-            'nodes_by_region': Counter(),
-        }
-        
-        for node, info in nodes_info.items():
-            result['nodes_by_region'][info['region']] += 1
-        
-        for u, v, data in G.edges(data=True):
-            pos_w = data.get('pos_weight', 0.0)
-            neg_w = data.get('neg_weight', 0.0)
-            
-            u_info = nodes_info.get(u)
-            v_info = nodes_info.get(v)
-            if not u_info or not v_info:
-                continue
-            
-            src_region = v_info['region']
-            tgt_region = u_info['region']
-            
-            # Question → Answer
-            if src_region == 'question':
-                if tgt_region == 'answer_ext':
-                    result['q_to_ans_ext_pos'].append(pos_w)
-                    result['q_to_ans_ext_neg'].append(neg_w)
-                elif tgt_region == 'answer_int':
-                    result['q_to_ans_int_pos'].append(pos_w)
-                    result['q_to_ans_int_neg'].append(neg_w)
-            # Answer_ext → Answer
-            elif src_region == 'answer_ext':
-                if tgt_region == 'answer_ext':
-                    result['ans_ext_to_ans_ext_pos'].append(pos_w)
-                    result['ans_ext_to_ans_ext_neg'].append(neg_w)
-                elif tgt_region == 'answer_int':
-                    result['ans_ext_to_ans_int_pos'].append(pos_w)
-                    result['ans_ext_to_ans_int_neg'].append(neg_w)
-            # Answer_int → Answer
-            elif src_region == 'answer_int':
-                if tgt_region == 'answer_ext':
-                    result['ans_int_to_ans_ext_pos'].append(pos_w)
-                    result['ans_int_to_ans_ext_neg'].append(neg_w)
-                elif tgt_region == 'answer_int':
-                    result['ans_int_to_ans_int_pos'].append(pos_w)
-                    result['ans_int_to_ans_int_neg'].append(neg_w)
-        
-        return result
-
-
-analyzer = MixAnalyzerPosWeight(tokenizer, CONFIG['n_layers'])
-print("Analyzer ready")
-
-
-# ==================== Analyze MIX samples ====================
-def analyze_mix_samples(graphs, test_data, analyzer, label):
-    results = []
-    for idx, G in graphs.items():
-        if idx >= len(test_data):
-            continue
-        try:
-            r = analyzer.analyze_graph_pos_weight(G, test_data[idx]['ans'])
-            
-            row = {
-                'idx': idx,
-                'label': label,
-                'n_edges': r['n_edges'],
-                'external_words_count': r['external_words_count'],
-                'n_question': r['nodes_by_region'].get('question', 0),
-                'n_ans_ext': r['nodes_by_region'].get('answer_ext', 0),
-                'n_ans_int': r['nodes_by_region'].get('answer_int', 0),
-            }
-            
-            # pos_weight statistics
-            for key in ['q_to_ans_ext', 'q_to_ans_int',
-                        'ans_ext_to_ans_ext', 'ans_ext_to_ans_int',
-                        'ans_int_to_ans_ext', 'ans_int_to_ans_int']:
-                pos_list = r[f'{key}_pos']
-                neg_list = r[f'{key}_neg']
-                row[f'{key}_pos_sum'] = sum(pos_list)
-                row[f'{key}_pos_mean'] = np.mean(pos_list) if pos_list else 0
-                row[f'{key}_pos_count'] = len([x for x in pos_list if x > 0])
-                row[f'{key}_neg_sum'] = sum(neg_list)
-                row[f'{key}_neg_mean'] = np.mean(neg_list) if neg_list else 0
-                row[f'{key}_neg_count'] = len([x for x in neg_list if x > 0])
-            
-            results.append(row)
-        except Exception as e:
-            continue
-    
-    return pd.DataFrame(results)
-
-
-print("\nAnalyzing MIX samples...")
-wrong_df = analyze_mix_samples(mix_wrong_graphs, test_data, analyzer, 'WRONG')
-correct_df = analyze_mix_samples(mix_correct_graphs, test_data, analyzer, 'CORRECT')
-all_df = pd.concat([wrong_df, correct_df])
-
-print(f"Analyzed: WRONG {len(wrong_df)}, CORRECT {len(correct_df)}")
-
-
-# ==================== Cliff's Delta ====================
-def cliffs_delta(x, y):
-    from bisect import bisect_left, bisect_right
-    x, y = np.asarray(x), np.asarray(y)
-    if len(x) == 0 or len(y) == 0:
-        return np.nan
-    more = less = 0
-    y_sorted = np.sort(y)
-    n1, n2 = len(x), len(y)
-    for val in np.sort(x):
-        more += bisect_left(y_sorted, val)
-        less += (n2 - bisect_right(y_sorted, val))
-    return (more - less) / (n1 * n2)
-
-def effect_label(d):
-    d = abs(d)
-    if d >= 0.474: return 'large'
-    elif d >= 0.33: return 'medium'
-    elif d >= 0.147: return 'small'
-    else: return 'negligible'
-
-
-# ==================== Statistical Comparison (using pos_mean) ====================
-print("\n" + "="*80)
-print("MIX: External vs Internal pos_mean statistical comparison (fair per-edge average weight comparison)")
-print("="*80)
-
-edge_types = ['q_to_ans_ext', 'q_to_ans_int', 
-              'ans_ext_to_ans_ext', 'ans_ext_to_ans_int',
-              'ans_int_to_ans_ext', 'ans_int_to_ans_int']
-
-# Focus on pos_mean as the primary comparison metric
-comparison_results = []
-for edge_type in edge_types:
-    for metric in ['pos_mean', 'neg_mean', 'pos_count']:  # mainly care about mean
-        col = f'{edge_type}_{metric}'
-        if col not in wrong_df.columns:
-            continue
-        
-        w_vals = wrong_df[col].dropna().values
-        c_vals = correct_df[col].dropna().values
-        
-        if len(w_vals) < 3 or len(c_vals) < 3:
-            continue
-        
-        try:
-            stat, pval = mannwhitneyu(c_vals, w_vals, alternative='two-sided')
-            delta = cliffs_delta(c_vals, w_vals)
-        except:
-            continue
-        
-        comparison_results.append({
-            'edge_type': edge_type,
-            'metric': metric,
-            'wrong_mean': np.mean(w_vals),
-            'correct_mean': np.mean(c_vals),
-            'diff': np.mean(c_vals) - np.mean(w_vals),
-            'rel_diff_pct': (np.mean(c_vals) - np.mean(w_vals)) / (abs(np.mean(w_vals)) + 1e-9) * 100,
-            'cliffs_delta': delta,
-            'effect': effect_label(delta),
-            'p_value': pval,
-        })
-
-comparison_df = pd.DataFrame(comparison_results).sort_values('p_value')
-
-print("\n" + "-"*120)
-print(f"{'Edge Type':<25} {'Metric':<12} {'WRONG':>12} {'CORRECT':>12} {'Diff':>12} {'Δ':>8} {'Effect':<10} {'p-value':<12} {'Direction':<10}")
-print("-"*120)
-
-for _, row in comparison_df.iterrows():
-    direction = "Correct↑" if row['diff'] > 0 else "Wrong↑"
-    sig = '***' if row['p_value'] < 0.001 else '**' if row['p_value'] < 0.01 else '*' if row['p_value'] < 0.05 else ''
-    print(f"{row['edge_type']:<25} {row['metric']:<12} {row['wrong_mean']:>12.4f} {row['correct_mean']:>12.4f} "
-          f"{row['diff']:>+12.4f} {row['cliffs_delta']:>+8.3f} {row['effect']:<10} {row['p_value']:.2e} {sig:<3} {direction:<10}")
-
-
-# ==================== Visualization (using pos_mean) ====================
-fig, axes = plt.subplots(2, 3, figsize=(18, 12))
-fig.suptitle('MIX Type: External vs Internal pos_mean Analysis (Wrong vs Correct)\nPer-edge average attention weight (fair comparison)',
-             fontsize=14, fontweight='bold')
-
-# pos_mean comparison for main edge types
-main_edge_types = ['q_to_ans_ext', 'q_to_ans_int', 'ans_ext_to_ans_int',
-                   'ans_int_to_ans_int', 'ans_ext_to_ans_ext', 'ans_int_to_ans_ext']
-labels_map = {
-    'q_to_ans_ext': 'Q→Ans_EXT',
-    'q_to_ans_int': 'Q→Ans_INT',
-    'ans_ext_to_ans_int': 'EXT→INT',
-    'ans_int_to_ans_int': 'INT→INT',
-    'ans_ext_to_ans_ext': 'EXT→EXT',
-    'ans_int_to_ans_ext': 'INT→EXT',
-}
-
-for i, edge_type in enumerate(main_edge_types):
-    ax = axes[i//3, i%3]
-    col = f'{edge_type}_pos_mean'  # switch to pos_mean
-    
-    if col in wrong_df.columns and col in correct_df.columns:
-        w_vals = wrong_df[col].dropna().values
-        c_vals = correct_df[col].dropna().values
-        
-        bp = ax.boxplot([w_vals, c_vals], tick_labels=['Wrong', 'Correct'], patch_artist=True)
-        bp['boxes'][0].set_facecolor('#e74c3c')
-        bp['boxes'][1].set_facecolor('#2ecc71')
-        
-        ax.set_title(f'{labels_map[edge_type]} (pos_mean)', fontsize=11, fontweight='bold')
-        ax.set_ylabel('pos_weight Mean (per-edge average)')
-        
-        # p-value and direction
-        try:
-            _, pval = mannwhitneyu(c_vals, w_vals, alternative='two-sided')
-            w_mean = np.mean(w_vals)
-            c_mean = np.mean(c_vals)
-            direction = "C↑" if c_mean > w_mean else "W↑"
-            color = 'green' if (pval < 0.05 and c_mean > w_mean) else 'red' if pval < 0.05 else 'black'
-            ax.text(0.5, 0.95, f'p={pval:.2e} {direction}', transform=ax.transAxes, ha='center', fontsize=9, color=color)
-        except:
-            pass
-
-plt.tight_layout()
-plt.savefig(f'{base_path}/graph_compare_6types_{CONFIG["name"]}_{CONFIG["dataset"]}_{CONFIG["edge_ratio"]}_{CONFIG["node_ratio"]}_{CONFIG["l1_co"]}/mix_external_internal_pos_mean.png', 
-            dpi=150, bbox_inches='tight')
-plt.show()
-
-
-# ==================== Summary Table (pos_mean) ====================
-print("\n" + "="*80)
-print("Summary: External vs Internal (pos_mean - per-edge average weight)")
-print("="*80)
-
-print(f"\n{'Edge Flow':<20} {'WRONG':>12} {'CORRECT':>12} {'Diff':>12} {'Direction':<12} {'Significant':<10}")
-print("-"*90)
-
-summary_data = []
-for edge_type in main_edge_types:
-    col = f'{edge_type}_pos_mean'
-    if col in wrong_df.columns and col in correct_df.columns:
-        w_vals = wrong_df[col].dropna().values
-        c_vals = correct_df[col].dropna().values
-        w = np.mean(w_vals)
-        c = np.mean(c_vals)
-        diff = c - w
-        direction = "Correct↑" if diff > 0 else "Wrong↑"
-        
-        try:
-            _, pval = mannwhitneyu(c_vals, w_vals, alternative='two-sided')
-            sig = "***" if pval < 0.001 else "**" if pval < 0.01 else "*" if pval < 0.05 else ""
-        except:
-            pval = 1.0
-            sig = ""
-        
-        summary_data.append({
-            'edge_type': edge_type,
-            'label': labels_map[edge_type],
-            'wrong': w,
-            'correct': c,
-            'diff': diff,
-            'direction': direction,
-            'pval': pval,
-            'sig': sig
-        })
-        print(f"{labels_map[edge_type]:<20} {w:>12.4f} {c:>12.4f} {diff:>+12.4f} {direction:<12} {sig:<10}")
-
-
-# ==================== Key Findings ====================
-print("\n" + "="*80)
-print("Key Findings: MIX External vs Internal (pos_mean analysis)")
-print("="*80)
-
-# Analyze results
-correct_higher = [s for s in summary_data if s['diff'] > 0 and s['pval'] < 0.05]
-wrong_higher = [s for s in summary_data if s['diff'] < 0 and s['pval'] < 0.05]
-
-print("\n[Edge types where Correct has higher per-edge average weight] (indicates more focused attention in Correct):")
-if correct_higher:
-    for s in correct_higher:
-        print(f"  {s['label']}: Correct={s['correct']:.4f}, Wrong={s['wrong']:.4f} ({s['diff']:+.4f})")
-else:
-    print("  (no significant difference)")
-
-print("\n[Edge types where Wrong has higher per-edge average weight] (indicates more focused attention on these edges in Wrong):")
-if wrong_higher:
-    for s in wrong_higher:
-        print(f"  {s['label']}: Wrong={s['wrong']:.4f}, Correct={s['correct']:.4f} ({abs(s['diff']):+.4f})")
-else:
-    print("  (no significant difference)")
-
-# Comparison with overall
-print("\n" + "-"*80)
-print("Comparison with overall pos_mean:")
-print("-"*80)
-print(f"  Overall pos_mean: Correct=8.67, Wrong=7.51 -> Correct higher (+15.5%)")
-
-if correct_higher:
-    print(f"\n  -> These edge types are consistent with the overall trend (Correct attention is stronger):")
-    for s in correct_higher:
-        print(f"     - {s['label']}")
-
-if wrong_higher:
-    print(f"\n  -> These edge types are contrary to the overall trend (Wrong attention is stronger):")
-    for s in wrong_higher:
-        print(f"     - {s['label']}")
-
-print("\n" + "="*80)
-print("Conclusion")
-print("="*80)
-if correct_higher and not wrong_higher:
-    print("  After pos_mean analysis, all edge types show Correct higher or no significant difference")
-    print("  This is consistent with the overall pos_mean trend: Correct samples have stronger per-edge attention")
-elif wrong_higher:
-    print(f"  {len(wrong_higher)} edge type(s) have higher pos_mean in Wrong:")
-    for s in wrong_higher:
-        print(f"     - {s['label']}: may indicate over-attention in Wrong samples on these connections")
-
-# Save results
-comparison_df.to_csv(f'{base_path}/graph_compare_6types_{CONFIG["name"]}_{CONFIG["dataset"]}_{CONFIG["edge_ratio"]}_{CONFIG["node_ratio"]}_{CONFIG["l1_co"]}/mix_ext_int_pos_mean_comparison_rebuttal.csv', index=False)
-print(f"\nResults saved")
-
 
 import torch
 import re
@@ -648,7 +184,6 @@ class AttentionInterventionHook:
         """Get hooks for all layers."""
         return [(f"blocks.{i}.attn.hook_pattern", self.create_layer_hook(i)) for i in range(n_layers)]
 
-
 # ============================================================
 # Generation functions
 # ============================================================
@@ -666,7 +201,6 @@ def build_prompt_musique(question: str, path: str, tokenizer) -> str:
     )
     messages = [{"role": "user", "content": user_content}]
     return tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-
 
 def generate_with_intervention(
     model, tokenizer, prompt: str,
@@ -688,7 +222,6 @@ def generate_with_intervention(
     generated = model.to_string(outputs[0, input_ids.shape[1]:])
     return generated.replace("<|eot_id|>", "").strip()
 
-
 def simple_match(generated: str, gold: str) -> bool:
     """Simple answer matching (fallback)."""
     gen_lower = generated.lower()
@@ -698,7 +231,6 @@ def simple_match(generated: str, gold: str) -> bool:
         gen_answer = match.group(1).lower()
         return gold_lower in gen_answer or gen_answer in gold_lower
     return gold_lower in gen_lower
-
 
 # ============================================================
 # Gemini judge functions
@@ -732,7 +264,6 @@ def gemini_judge(question: str, gold_ans: str, pred_ans: str, max_retries: int =
             else:
                 print(f"Gemini API error: {e}")
                 return simple_match(pred_ans, gold_ans)
-
 
 # ============================================================
 # Load model
@@ -799,7 +330,6 @@ except NameError:
     )
     tokenizer.chat_template = LLAMA3_CHAT_TEMPLATE
     print("Model loading complete")
-
 
 # ============================================================
 # Run experiment

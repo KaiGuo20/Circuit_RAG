@@ -54,7 +54,7 @@ After Step 4, choose one of two downstream analyses:
 
 ### Step 5a — Detection (`detection.py`)
 
-Train a GNN classifier on the extracted attribution graphs to **detect** whether the model will answer correctly or incorrectly.
+Train a classifier on the extracted attribution graphs to **detect** whether the model will answer correctly or incorrectly.
 
 ```bash
 python detection.py
@@ -62,13 +62,14 @@ python detection.py
 
 - Uses `torch_geometric` (GINEConv / TransformerConv) on the circuit graphs.
 
-### Step 5b — Intervention (`intervention.py`)
+### Step 5b — Attention Intervention (`intervention.py`)
 
-Analyze the attribution graphs to identify which edges/positions drive correct vs. incorrect answers, comparing external (context) vs. internal (parametric) knowledge paths.
+Perturb the model's attention at inference time to test whether steering attention toward the question improves answers on **MIX-type** samples (context containing both supporting and distracting passages).
 
 ```bash
 python intervention.py
 ```
+
 
 
 ## Dependencies
