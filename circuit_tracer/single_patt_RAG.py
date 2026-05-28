@@ -416,11 +416,8 @@ for idx, data in enumerate(test_data):
     if data['judge'] is None:
         print(f'None idx {idx}')
         continue
-    if train_dataset_name == 'gsm8k':
-        judge, match = answer_judge_string(data)
-    elif train_dataset_name == 'WebQSP' or train_dataset_name == 'WebQSP_ROG':
-        judge, match = answer_judge_webqsp(data)
-    elif train_dataset_name == 'hotpotqa':
+
+    if train_dataset_name == 'hotpotqa':
         judge, match = answer_judge_hotpotqa(data, wrong=wrong_answer_flag)
     elif train_dataset_name == '2wiki':
         judge, match = answer_judge_2wiki(data, wrong=wrong_answer_flag)
@@ -428,18 +425,6 @@ for idx, data in enumerate(test_data):
         judge, match = answer_judge_musique(data, wrong=wrong_answer_flag)
     elif train_dataset_name == 'manu_musique':
         judge, match = answer_judge_musique(data, wrong=wrong_answer_flag)
-    elif train_dataset_name == 'boolQA':
-        judge_dicts = {bool(0): 'False', bool(1): 'True'}
-        judge, match = answer_judge_bool(data, judge_dicts)
-
-    elif train_dataset_name == 'MAWPS':
-        judge, match = answer_judge_string_bool(data)
-    elif train_dataset_name == 'qasc' or train_dataset_name == 'arc':
-        judge, match = answer_judge_string_list(data)
-
-    elif train_dataset_name == 'prontoQA':
-        judge_dicts = {'True': 'True', 'False': 'False'}
-        judge, match = answer_judge_bool(data, judge_dicts)
 
     if judge:
         # print('idx',idx)
@@ -469,27 +454,9 @@ for idx, data in enumerate(test_data):
                     else: 
                         match_collect[idx] = txt
                     
-        elif train_dataset_name == 'boolQA':
-            if data['gold_ans'] == True:
-                match_collect[idx] = 'False'
-            else:
-                match_collect[idx] = 'True'
-        elif train_dataset_name == 'qasc' or train_dataset_name == 'arc':
-            match_collect[idx] = find_last_uppercase_simple(data['ans'])
-        elif train_dataset_name == 'prontoQA':
-            if 'ink>' not in data['ans']: continue
-            else:
-                tmp_ans = data['ans'].split('ink>')[1]
-                if 'true' in tmp_ans:
-                    match_collect[idx] = 'true'
-                elif 'false' in tmp_ans:
-                    match_collect[idx] = 'false'
+
         
-    # exit()
-# print(match_collect)            
-# exit()
-# print(correct_idx)
-# print(len(correct_idx)/len(test_data))
+
 max_n_logits = 10   # How many logits to attribute from, max. We attribute to min(max_n_logits, n_logits_to_reach_desired_log_prob); see below for the latter
 desired_logit_prob = 0.95  # Attribution will attribute from the minimum number of logits needed to reach this probability mass (or max_n_logits, whichever is lower)
 max_feature_nodes = 1024#2048  # Only attribute from this number of feature nodes, max. Lower is faster, but you will lose more of the graph. None means no limit.
@@ -570,63 +537,21 @@ import random
 
 print(len(test_data))
 
-if train_dataset_name == 'gsm8k'or train_dataset_name == 'MAWPS':
-    if name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][1]
-    elif name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'llama' in name.lower():
-        tokenizer_Answer  = tokenizer('Answer')['input_ids'][1]
-elif train_dataset_name == 'WebQSP' or train_dataset_name == 'WebQSP_ROG':
-    if name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][1]
-    elif name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'llama' in name.lower():
-        tokenizer_Answer  = tokenizer(' Answer')['input_ids'][1]  
-        print('tokenizer_Answer', tokenizer_Answer)
 
-elif train_dataset_name == 'hotpotqa':
-    if name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][1]
-    elif name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'llama' in name.lower():
+
+if train_dataset_name == 'hotpotqa':
+    if 'llama' in name.lower():
         tokenizer_Answer  = tokenizer(' Answer')['input_ids'][1]  
         print('tokenizer_Answer', tokenizer_Answer)
 elif train_dataset_name == '2wiki':
-    if name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][1]
-    elif name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'llama' in name.lower():
+    if 'llama' in name.lower():
         tokenizer_Answer  = tokenizer(' Answer')['input_ids'][1]  
         print('tokenizer_Answer', tokenizer_Answer)
 elif train_dataset_name == 'musique' or train_dataset_name == 'manu_musique':
-    if name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][1]
-    elif name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
-    elif 'llama' in name.lower():
+    if 'llama' in name.lower():
         tokenizer_Answer  = tokenizer(' Answer')['input_ids'][1]  
         print('tokenizer_Answer', tokenizer_Answer)
-elif train_dataset_name == 'prontoQA' or train_dataset_name == 'boolQA' or train_dataset_name == 'arc' or train_dataset_name == 'qasc':
-    if name == 'Qwen3-0.6B':
-        tokenizer_Answer = tokenizer('<think>')['input_ids'][0]
-    elif name == 'ds-qwen-1.5B':
-        tokenizer_Answer = tokenizer('<think>')['input_ids'][1]
-    elif 'Qwen-1.5' in name:
-        tokenizer_Answer = tokenizer('Answer')['input_ids'][0]
+
 # print(tokenizer.decode(128000))
 # print(tokenizer.decode(16533))
 # print('token answer',tokenizer_Answer)
