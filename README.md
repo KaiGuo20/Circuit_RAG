@@ -37,10 +37,7 @@ cd circuit_tracer
 python main_train_RAG.py
 ```
 
-Key components:
-- `SingleLayerTranscoder` — one transcoder per MLP layer.
-- `ReplacementModel` (`my_replacement_model.py`) — wraps the frozen LLM with linear hook points.
-- Training loss: **MSE** reconstruction of MLP activations; 
+
 
 ### Step 4 — Extract Single-Path Activation Graph (`circuit_tracer/single_patt_RAG.py`)
 
@@ -60,7 +57,7 @@ Train a classifier on the extracted attribution graphs to **detect** whether the
 python detection.py
 ```
 
-- Uses `torch_geometric` (GINEConv / TransformerConv) on the circuit graphs.
+- Uses `torch_geometric`  on the circuit graphs.
 
 ### Step 5b — Attention Intervention (`intervention.py`)
 
